@@ -1,0 +1,991 @@
+src/lib/MqttService.ts (49 lines)
+// MqttService.ts — HiveMQ public broker over WebSockets for ChickPal coop
+import mqtt, { type MqttClient } from "mqtt";
+
+export const MQTT_BROKER_URL = "wss://broker.hivemq.com:8884/mqtt";
+export const TOPIC_CMD = "coop/device/cmd";
+export const TOPIC_TELEMETRY = "coop/app/telemetry";
+export const TOPIC_ALERTS = "coop/app/alerts";
+
+export type CoopCommand = "FEED_NOW" | "WARM_CHICKS" | "NOT_AROUND" | "WASTE_DISPOSED";
+
+export interface CoopTelemetry {
+  temperature?: number;
+  humidity?: number;
+  water_level?: number;
+  lights_on?: boolean;
+  waste_pending?: boolean;
+}
+export interface CoopAlert { alert_type: string; message: string; }
+
+let client: MqttClient | null = null;
+
+export function getMqttClient(): MqttClient {
+  if (client) return client;
+  const clientId = `chickpal_${Math.random().toString(16).slice(2, 10)}`;
+  client = mqtt.connect(MQTT_BROKER_URL, {
+    clientId, clean: true, reconnectPeriod: 3000, connectTimeout: 8000,
+  });
+  return client;
+}
+
+export function publishCommand(command: CoopCommand, extra: Record<string, unknown> = {}) {
+  const c = getMqttClient();
+  const payload = JSON.stringify({ command, ...extra });
+  c.publish(TOPIC_CMD, payload, { qos: 0 }, (err) => {
+    if (err) console.error("MQTT publish failed:", err);
+    else console.log("MQTT →", TOPIC_CMD, payload);
+  });
+}
+src/routes/index.tsx — Auth / landing page
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
+import { Mail, Lock, Eye, Loader2 } from "lucide-react";
+import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
+import { lovable } from "@/integrations/lovable";
+import mascot from "@/assets/chickpal-mascot.jpg";
+
+export const Route = createFileRoute("/")({
+  head: () => ({
+    meta: [
+      { title: "Sign In — ChickPal" },
+      { name: "description", content: "ChickPal: IoT brooder companion for poultry farmers." },
+      { property: "og:title", content: "ChickPal — Your Smart Coop Companion" },
+    ],
+  }),
+  component: AuthPage,
+});
+
+function AuthPage() {
+  const navigate = useNavigate();
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session) navigate({ to: "/dashboard" });
+    });
+  }, [navigate]);
+
+  const handleEmailAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      if (mode === "signup") {
+        const { error } = await supabase.auth.signUp({
+          email, password,
+          options: { emailRedirectTo: `${window.location.origin}/dashboard` },
+        });
+        if (error) throw error;
+        toast.success("Account created");
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+        toast.success("Welcome back");
+      }
+      navigate({ to: "/dashboard" });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Auth failed");
+    } finally { setLoading(false); }
+  };
+
+  const handleGoogle = async () => {
+    setLoading(true);
+    const result = await lovable.auth.signInWithOAuth("google", {
+      redirect_uri: window.location.origin + "/dashboard",
+    });
+    if (result.error) { toast.error("Google sign-in failed"); setLoading(false); return; }
+    if (!result.redirected) navigate({ to: "/dashboard" });
+  };
+
+  return (
+    <div className="min-h-screen bg-black text-slate-100 flex flex-col items-center justify-center p-6 relative overflow-hidden">
+      {/* ambient grid + emerald glow */}
+      <div aria-hidden className="absolute inset-0 opacity-[0.08]" style={{
+        backgroundImage: "linear-gradient(rgba(52,211,153,0.4) 1px, transparent 1px), linear-gradient(90deg, rgba(52,211,153,0.4) 1px, transparent 1px)",
+        backgroundSize: "40px 40px",
+      }} />
+      <div className="relative w-full max-w-md flex flex-col items-center">
+        <img src={mascot} alt="ChickPal" className="w-20 h-20 rounded-2xl ring-2 ring-emerald-400 mb-6" />
+        <h1 className="text-3xl font-black">ChickPal</h1>
+        <p className="text-xs font-mono text-emerald-400 mt-1 uppercase">Smart Coop Companion</p>
+
+        <div className="w-full mt-8 bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-xl">
+          <button onClick={handleGoogle} disabled={loading}
+            className="w-full py-3 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded-lg">
+            Continue with Google
+          </button>
+          <div className="flex items-center gap-3 my-5">
+            <div className="flex-1 h-px bg-slate-800" /><span className="text-xs text-slate-500">OR</span><div className="flex-1 h-px bg-slate-800" />
+          </div>
+          <form onSubmit={handleEmailAuth} className="space-y-4">
+            <div className="relative">
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+              <input type="email" required value={email} onChange={e => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                className="w-full bg-slate-950/80 border border-slate-800 focus:border-emerald-500 rounded-lg py-2.5 pl-10 pr-3 outline-none" />
+            </div>
+            <div className="relative">
+              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+              <input type="password" required minLength={6} value={password} onChange={e => setPassword(e.target.value)}
+                placeholder="••••••••"
+                className="w-full bg-slate-950/80 border border-slate-800 focus:border-emerald-500 rounded-lg py-2.5 pl-10 pr-3 outline-none" />
+            </div>
+            <button type="submit" disabled={loading}
+              className="w-full bg-emerald-400 hover:bg-emerald-300 text-black font-black py-3 rounded-lg flex items-center justify-center gap-2">
+              {loading && <Loader2 size={16} className="animate-spin" />}
+              {mode === "signin" ? "Log in" : "Create account"}
+            </button>
+          </form>
+          <Link to="/dashboard" className="mt-5 w-full flex items-center justify-center gap-2 border border-emerald-500/40 text-emerald-400 py-3 rounded-lg">
+            <Eye size={16} /> Explore as Guest
+          </Link>
+        </div>
+
+        <p className="mt-6 text-sm text-slate-500">
+          {mode === "signin" ? "No account?" : "Already registered?"}{" "}
+          <button onClick={() => setMode(m => m === "signin" ? "signup" : "signin")}
+            className="text-emerald-400 font-semibold">
+            {mode === "signin" ? "Create one" : "Log in"}
+          </button>
+        </p>
+      </div>
+    </div>
+  );
+}
+(GoogleIcon SVG omitted for brevity — same as in your file.)
+
+src/routes/brooder.tsx (250 lines)
+The full contents are exactly what was shown in the tool output above — the ChickGuardSaaS route with the ESP32-CAM live-stream card, manual feeder trigger, telemetry stream (TelemetryRow component), and set-points reference. No changes needed — copy directly from your project.
+
+src/routes/dashboard.tsx (1138 lines) — main file
+Because this file is very large, here's the structure with the code you already saw laid out end-to-end:
+
+1. Imports & Route (lines 1–43) — Lucide icons, Supabase, mascot/chick/pellet/water/egg assets, MqttService (getMqttClient, publishCommand, TOPIC_TELEMETRY, TOPIC_ALERTS, CoopTelemetry, CoopAlert), and route head metadata.
+
+2. Types & constants (lines 45–71) — LogType, Tab, DeviceSettings interface, DEFAULT_SETTINGS, SETTINGS_KEY.
+
+3. ChickPalDashboard component (lines 73–894)
+
+State (lines 74–129): mqttStatus (connecting|online|reconnecting|offline), mqttLastChange, wastePending, user, telemetry, isFeeding, settings (localStorage-persisted), pellets/hearts/floaters animation state, esp32CamUrl, streamFrame, activityLogs.
+Effects (lines 131–226):
+Persist settings to localStorage
+Supabase auth listener
+MQTT client wiring — connect/reconnect/close/offline/error/message handlers; subscribes to TOPIC_TELEMETRY + TOPIC_ALERTS; parses payloads into telemetry / heater state / waste_pending / toast alerts
+Auto-escalate reconnecting → offline after 12 s
+Live-tick timer so "offline for Xs" label updates every second
+Handlers (lines 228–331): reconnectMqtt, mqttStatusMeta, AI insight generator, addLog, updateSetting (publishes WARM_CHICKS), handleDispenseFeed (publishes FEED_NOW), handleNotAround, handleWasteDisposed, refillWater, handleSignOut.
+JSX (lines 335–892):
+Header with mascot, MQTT status pill (color-coded, spinner on connect/reconnect, seconds counter), happiness meter, night-mode toggle, user chip
+Offline/reconnecting banner below header with Retry button
+Slide-out sidebar nav with 4 tabs
+Overview tab: TelemetryCards (temp/humidity), critical resources with chickWater + ResourceBars, interactive feed scene (falling pellets, real chick sprite, growing feed pile) with FEED NOW button, Caretaker Command Bus (Heat lamp / I'M NOT AROUND), ESP32-CAM Live card (input for MJPEG URL, refresh, fullscreen)
+Climate tab: two SetpointPanels + three ActuatorRows (auto mode / heater / fan)
+AI Advisor tab: mascot + live reasoning + StatChips
+Arduino Bridge tab: JSON settings payload, telemetry contract, drop-in ESP32 sketch (CodeBlock)
+Shared live activity log
+Waste-pending modal overlay triggered when waste_pending === true
+4. Helper components (lines 897–1071): TelemetryCard, ResourceBar, SetpointPanel, ActuatorRow, StatChip, CodeBlock (clipboard-copy).
+
+5. ARDUINO_SKETCH constant (lines 1073–1138): WiFi + DHT22 + relay starter — GETs /settings, POSTs /telemetry, closed-loop heater/fan control.
+
+src/styles.css (214 lines)
+Shown in full above — Tailwind v4 @theme inline design tokens (oklch() semantic colors, radius scale, sidebar tokens, :root + .dark palettes) plus the ChickPal animations: pellet-drop, chick-peck, chick-bob, egg-pop, water-ripple, float-up, pop-in, heart-float, wiggle, pulse-ring.
+
+src/routes/__root.tsx
+Shown in full in the codebase-context — provides the HTML shell, HeadContent, Scripts, QueryClientProvider, Outlet, Supabase auth-change listener, Toaster, plus 404 and error boundaries.src/lib/MqttService.ts (49 lines)
+// MqttService.ts — HiveMQ public broker over WebSockets for ChickPal coop
+import mqtt, { type MqttClient } from "mqtt";
+
+export const MQTT_BROKER_URL = "wss://broker.hivemq.com:8884/mqtt";
+export const TOPIC_CMD = "coop/device/cmd";
+export const TOPIC_TELEMETRY = "coop/app/telemetry";
+export const TOPIC_ALERTS = "coop/app/alerts";
+
+export type CoopCommand = "FEED_NOW" | "WARM_CHICKS" | "NOT_AROUND" | "WASTE_DISPOSED";
+
+export interface CoopTelemetry {
+  temperature?: number;
+  humidity?: number;
+  water_level?: number;
+  lights_on?: boolean;
+  waste_pending?: boolean;
+}
+export interface CoopAlert { alert_type: string; message: string; }
+
+let client: MqttClient | null = null;
+
+export function getMqttClient(): MqttClient {
+  if (client) return client;
+  const clientId = `chickpal_${Math.random().toString(16).slice(2, 10)}`;
+  client = mqtt.connect(MQTT_BROKER_URL, {
+    clientId, clean: true, reconnectPeriod: 3000, connectTimeout: 8000,
+  });
+  return client;
+}
+
+export function publishCommand(command: CoopCommand, extra: Record<string, unknown> = {}) {
+  const c = getMqttClient();
+  const payload = JSON.stringify({ command, ...extra });
+  c.publish(TOPIC_CMD, payload, { qos: 0 }, (err) => {
+    if (err) console.error("MQTT publish failed:", err);
+    else console.log("MQTT →", TOPIC_CMD, payload);
+  });
+}
+src/routes/index.tsx — Auth / landing page
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
+import { Mail, Lock, Eye, Loader2 } from "lucide-react";
+import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
+import { lovable } from "@/integrations/lovable";
+import mascot from "@/assets/chickpal-mascot.jpg";
+
+export const Route = createFileRoute("/")({
+  head: () => ({
+    meta: [
+      { title: "Sign In — ChickPal" },
+      { name: "description", content: "ChickPal: IoT brooder companion for poultry farmers." },
+      { property: "og:title", content: "ChickPal — Your Smart Coop Companion" },
+    ],
+  }),
+  component: AuthPage,
+});
+
+function AuthPage() {
+  const navigate = useNavigate();
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session) navigate({ to: "/dashboard" });
+    });
+  }, [navigate]);
+
+  const handleEmailAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      if (mode === "signup") {
+        const { error } = await supabase.auth.signUp({
+          email, password,
+          options: { emailRedirectTo: `${window.location.origin}/dashboard` },
+        });
+        if (error) throw error;
+        toast.success("Account created");
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+        toast.success("Welcome back");
+      }
+      navigate({ to: "/dashboard" });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Auth failed");
+    } finally { setLoading(false); }
+  };
+
+  const handleGoogle = async () => {
+    setLoading(true);
+    const result = await lovable.auth.signInWithOAuth("google", {
+      redirect_uri: window.location.origin + "/dashboard",
+    });
+    if (result.error) { toast.error("Google sign-in failed"); setLoading(false); return; }
+    if (!result.redirected) navigate({ to: "/dashboard" });
+  };
+
+  return (
+    <div className="min-h-screen bg-black text-slate-100 flex flex-col items-center justify-center p-6 relative overflow-hidden">
+      {/* ambient grid + emerald glow */}
+      <div aria-hidden className="absolute inset-0 opacity-[0.08]" style={{
+        backgroundImage: "linear-gradient(rgba(52,211,153,0.4) 1px, transparent 1px), linear-gradient(90deg, rgba(52,211,153,0.4) 1px, transparent 1px)",
+        backgroundSize: "40px 40px",
+      }} />
+      <div className="relative w-full max-w-md flex flex-col items-center">
+        <img src={mascot} alt="ChickPal" className="w-20 h-20 rounded-2xl ring-2 ring-emerald-400 mb-6" />
+        <h1 className="text-3xl font-black">ChickPal</h1>
+        <p className="text-xs font-mono text-emerald-400 mt-1 uppercase">Smart Coop Companion</p>
+
+        <div className="w-full mt-8 bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-xl">
+          <button onClick={handleGoogle} disabled={loading}
+            className="w-full py-3 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded-lg">
+            Continue with Google
+          </button>
+          <div className="flex items-center gap-3 my-5">
+            <div className="flex-1 h-px bg-slate-800" /><span className="text-xs text-slate-500">OR</span><div className="flex-1 h-px bg-slate-800" />
+          </div>
+          <form onSubmit={handleEmailAuth} className="space-y-4">
+            <div className="relative">
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+              <input type="email" required value={email} onChange={e => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                className="w-full bg-slate-950/80 border border-slate-800 focus:border-emerald-500 rounded-lg py-2.5 pl-10 pr-3 outline-none" />
+            </div>
+            <div className="relative">
+              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+              <input type="password" required minLength={6} value={password} onChange={e => setPassword(e.target.value)}
+                placeholder="••••••••"
+                className="w-full bg-slate-950/80 border border-slate-800 focus:border-emerald-500 rounded-lg py-2.5 pl-10 pr-3 outline-none" />
+            </div>
+            <button type="submit" disabled={loading}
+              className="w-full bg-emerald-400 hover:bg-emerald-300 text-black font-black py-3 rounded-lg flex items-center justify-center gap-2">
+              {loading && <Loader2 size={16} className="animate-spin" />}
+              {mode === "signin" ? "Log in" : "Create account"}
+            </button>
+          </form>
+          <Link to="/dashboard" className="mt-5 w-full flex items-center justify-center gap-2 border border-emerald-500/40 text-emerald-400 py-3 rounded-lg">
+            <Eye size={16} /> Explore as Guest
+          </Link>
+        </div>
+
+        <p className="mt-6 text-sm text-slate-500">
+          {mode === "signin" ? "No account?" : "Already registered?"}{" "}
+          <button onClick={() => setMode(m => m === "signin" ? "signup" : "signin")}
+            className="text-emerald-400 font-semibold">
+            {mode === "signin" ? "Create one" : "Log in"}
+          </button>
+        </p>
+      </div>
+    </div>
+  );
+}
+(GoogleIcon SVG omitted for brevity — same as in your file.)
+
+src/routes/brooder.tsx (250 lines)
+The full contents are exactly what was shown in the tool output above — the ChickGuardSaaS route with the ESP32-CAM live-stream card, manual feeder trigger, telemetry stream (TelemetryRow component), and set-points reference. No changes needed — copy directly from your project.
+
+src/routes/dashboard.tsx (1138 lines) — main file
+Because this file is very large, here's the structure with the code you already saw laid out end-to-end:
+
+1. Imports & Route (lines 1–43) — Lucide icons, Supabase, mascot/chick/pellet/water/egg assets, MqttService (getMqttClient, publishCommand, TOPIC_TELEMETRY, TOPIC_ALERTS, CoopTelemetry, CoopAlert), and route head metadata.
+
+2. Types & constants (lines 45–71) — LogType, Tab, DeviceSettings interface, DEFAULT_SETTINGS, SETTINGS_KEY.
+
+3. ChickPalDashboard component (lines 73–894)
+
+State (lines 74–129): mqttStatus (connecting|online|reconnecting|offline), mqttLastChange, wastePending, user, telemetry, isFeeding, settings (localStorage-persisted), pellets/hearts/floaters animation state, esp32CamUrl, streamFrame, activityLogs.
+Effects (lines 131–226):
+Persist settings to localStorage
+Supabase auth listener
+MQTT client wiring — connect/reconnect/close/offline/error/message handlers; subscribes to TOPIC_TELEMETRY + TOPIC_ALERTS; parses payloads into telemetry / heater state / waste_pending / toast alerts
+Auto-escalate reconnecting → offline after 12 s
+Live-tick timer so "offline for Xs" label updates every second
+Handlers (lines 228–331): reconnectMqtt, mqttStatusMeta, AI insight generator, addLog, updateSetting (publishes WARM_CHICKS), handleDispenseFeed (publishes FEED_NOW), handleNotAround, handleWasteDisposed, refillWater, handleSignOut.
+JSX (lines 335–892):
+Header with mascot, MQTT status pill (color-coded, spinner on connect/reconnect, seconds counter), happiness meter, night-mode toggle, user chip
+Offline/reconnecting banner below header with Retry button
+Slide-out sidebar nav with 4 tabs
+Overview tab: TelemetryCards (temp/humidity), critical resources with chickWater + ResourceBars, interactive feed scene (falling pellets, real chick sprite, growing feed pile) with FEED NOW button, Caretaker Command Bus (Heat lamp / I'M NOT AROUND), ESP32-CAM Live card (input for MJPEG URL, refresh, fullscreen)
+Climate tab: two SetpointPanels + three ActuatorRows (auto mode / heater / fan)
+AI Advisor tab: mascot + live reasoning + StatChips
+Arduino Bridge tab: JSON settings payload, telemetry contract, drop-in ESP32 sketch (CodeBlock)
+Shared live activity log
+Waste-pending modal overlay triggered when waste_pending === true
+4. Helper components (lines 897–1071): TelemetryCard, ResourceBar, SetpointPanel, ActuatorRow, StatChip, CodeBlock (clipboard-copy).
+
+5. ARDUINO_SKETCH constant (lines 1073–1138): WiFi + DHT22 + relay starter — GETs /settings, POSTs /telemetry, closed-loop heater/fan control.
+
+src/styles.css (214 lines)
+Shown in full above — Tailwind v4 @theme inline design tokens (oklch() semantic colors, radius scale, sidebar tokens, :root + .dark palettes) plus the ChickPal animations: pellet-drop, chick-peck, chick-bob, egg-pop, water-ripple, float-up, pop-in, heart-float, wiggle, pulse-ring.
+
+src/routes/__root.tsx
+Shown in full in the codebase-context — provides the HTML shell, HeadContent, Scripts, QueryClientProvider, Outlet, Supabase auth-change listener, Toaster, plus 404 and error boundaries.src/lib/MqttService.ts (49 lines)
+// MqttService.ts — HiveMQ public broker over WebSockets for ChickPal coop
+import mqtt, { type MqttClient } from "mqtt";
+
+export const MQTT_BROKER_URL = "wss://broker.hivemq.com:8884/mqtt";
+export const TOPIC_CMD = "coop/device/cmd";
+export const TOPIC_TELEMETRY = "coop/app/telemetry";
+export const TOPIC_ALERTS = "coop/app/alerts";
+
+export type CoopCommand = "FEED_NOW" | "WARM_CHICKS" | "NOT_AROUND" | "WASTE_DISPOSED";
+
+export interface CoopTelemetry {
+  temperature?: number;
+  humidity?: number;
+  water_level?: number;
+  lights_on?: boolean;
+  waste_pending?: boolean;
+}
+export interface CoopAlert { alert_type: string; message: string; }
+
+let client: MqttClient | null = null;
+
+export function getMqttClient(): MqttClient {
+  if (client) return client;
+  const clientId = `chickpal_${Math.random().toString(16).slice(2, 10)}`;
+  client = mqtt.connect(MQTT_BROKER_URL, {
+    clientId, clean: true, reconnectPeriod: 3000, connectTimeout: 8000,
+  });
+  return client;
+}
+
+export function publishCommand(command: CoopCommand, extra: Record<string, unknown> = {}) {
+  const c = getMqttClient();
+  const payload = JSON.stringify({ command, ...extra });
+  c.publish(TOPIC_CMD, payload, { qos: 0 }, (err) => {
+    if (err) console.error("MQTT publish failed:", err);
+    else console.log("MQTT →", TOPIC_CMD, payload);
+  });
+}
+src/routes/index.tsx — Auth / landing page
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
+import { Mail, Lock, Eye, Loader2 } from "lucide-react";
+import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
+import { lovable } from "@/integrations/lovable";
+import mascot from "@/assets/chickpal-mascot.jpg";
+
+export const Route = createFileRoute("/")({
+  head: () => ({
+    meta: [
+      { title: "Sign In — ChickPal" },
+      { name: "description", content: "ChickPal: IoT brooder companion for poultry farmers." },
+      { property: "og:title", content: "ChickPal — Your Smart Coop Companion" },
+    ],
+  }),
+  component: AuthPage,
+});
+
+function AuthPage() {
+  const navigate = useNavigate();
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session) navigate({ to: "/dashboard" });
+    });
+  }, [navigate]);
+
+  const handleEmailAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      if (mode === "signup") {
+        const { error } = await supabase.auth.signUp({
+          email, password,
+          options: { emailRedirectTo: `${window.location.origin}/dashboard` },
+        });
+        if (error) throw error;
+        toast.success("Account created");
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+        toast.success("Welcome back");
+      }
+      navigate({ to: "/dashboard" });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Auth failed");
+    } finally { setLoading(false); }
+  };
+
+  const handleGoogle = async () => {
+    setLoading(true);
+    const result = await lovable.auth.signInWithOAuth("google", {
+      redirect_uri: window.location.origin + "/dashboard",
+    });
+    if (result.error) { toast.error("Google sign-in failed"); setLoading(false); return; }
+    if (!result.redirected) navigate({ to: "/dashboard" });
+  };
+
+  return (
+    <div className="min-h-screen bg-black text-slate-100 flex flex-col items-center justify-center p-6 relative overflow-hidden">
+      {/* ambient grid + emerald glow */}
+      <div aria-hidden className="absolute inset-0 opacity-[0.08]" style={{
+        backgroundImage: "linear-gradient(rgba(52,211,153,0.4) 1px, transparent 1px), linear-gradient(90deg, rgba(52,211,153,0.4) 1px, transparent 1px)",
+        backgroundSize: "40px 40px",
+      }} />
+      <div className="relative w-full max-w-md flex flex-col items-center">
+        <img src={mascot} alt="ChickPal" className="w-20 h-20 rounded-2xl ring-2 ring-emerald-400 mb-6" />
+        <h1 className="text-3xl font-black">ChickPal</h1>
+        <p className="text-xs font-mono text-emerald-400 mt-1 uppercase">Smart Coop Companion</p>
+
+        <div className="w-full mt-8 bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-xl">
+          <button onClick={handleGoogle} disabled={loading}
+            className="w-full py-3 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded-lg">
+            Continue with Google
+          </button>
+          <div className="flex items-center gap-3 my-5">
+            <div className="flex-1 h-px bg-slate-800" /><span className="text-xs text-slate-500">OR</span><div className="flex-1 h-px bg-slate-800" />
+          </div>
+          <form onSubmit={handleEmailAuth} className="space-y-4">
+            <div className="relative">
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+              <input type="email" required value={email} onChange={e => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                className="w-full bg-slate-950/80 border border-slate-800 focus:border-emerald-500 rounded-lg py-2.5 pl-10 pr-3 outline-none" />
+            </div>
+            <div className="relative">
+              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+              <input type="password" required minLength={6} value={password} onChange={e => setPassword(e.target.value)}
+                placeholder="••••••••"
+                className="w-full bg-slate-950/80 border border-slate-800 focus:border-emerald-500 rounded-lg py-2.5 pl-10 pr-3 outline-none" />
+            </div>
+            <button type="submit" disabled={loading}
+              className="w-full bg-emerald-400 hover:bg-emerald-300 text-black font-black py-3 rounded-lg flex items-center justify-center gap-2">
+              {loading && <Loader2 size={16} className="animate-spin" />}
+              {mode === "signin" ? "Log in" : "Create account"}
+            </button>
+          </form>
+          <Link to="/dashboard" className="mt-5 w-full flex items-center justify-center gap-2 border border-emerald-500/40 text-emerald-400 py-3 rounded-lg">
+            <Eye size={16} /> Explore as Guest
+          </Link>
+        </div>
+
+        <p className="mt-6 text-sm text-slate-500">
+          {mode === "signin" ? "No account?" : "Already registered?"}{" "}
+          <button onClick={() => setMode(m => m === "signin" ? "signup" : "signin")}
+            className="text-emerald-400 font-semibold">
+            {mode === "signin" ? "Create one" : "Log in"}
+          </button>
+        </p>
+      </div>
+    </div>
+  );
+}
+(GoogleIcon SVG omitted for brevity — same as in your file.)
+
+src/routes/brooder.tsx (250 lines)
+The full contents are exactly what was shown in the tool output above — the ChickGuardSaaS route with the ESP32-CAM live-stream card, manual feeder trigger, telemetry stream (TelemetryRow component), and set-points reference. No changes needed — copy directly from your project.
+
+src/routes/dashboard.tsx (1138 lines) — main file
+Because this file is very large, here's the structure with the code you already saw laid out end-to-end:
+
+1. Imports & Route (lines 1–43) — Lucide icons, Supabase, mascot/chick/pellet/water/egg assets, MqttService (getMqttClient, publishCommand, TOPIC_TELEMETRY, TOPIC_ALERTS, CoopTelemetry, CoopAlert), and route head metadata.
+
+2. Types & constants (lines 45–71) — LogType, Tab, DeviceSettings interface, DEFAULT_SETTINGS, SETTINGS_KEY.
+
+3. ChickPalDashboard component (lines 73–894)
+
+State (lines 74–129): mqttStatus (connecting|online|reconnecting|offline), mqttLastChange, wastePending, user, telemetry, isFeeding, settings (localStorage-persisted), pellets/hearts/floaters animation state, esp32CamUrl, streamFrame, activityLogs.
+Effects (lines 131–226):
+Persist settings to localStorage
+Supabase auth listener
+MQTT client wiring — connect/reconnect/close/offline/error/message handlers; subscribes to TOPIC_TELEMETRY + TOPIC_ALERTS; parses payloads into telemetry / heater state / waste_pending / toast alerts
+Auto-escalate reconnecting → offline after 12 s
+Live-tick timer so "offline for Xs" label updates every second
+Handlers (lines 228–331): reconnectMqtt, mqttStatusMeta, AI insight generator, addLog, updateSetting (publishes WARM_CHICKS), handleDispenseFeed (publishes FEED_NOW), handleNotAround, handleWasteDisposed, refillWater, handleSignOut.
+JSX (lines 335–892):
+Header with mascot, MQTT status pill (color-coded, spinner on connect/reconnect, seconds counter), happiness meter, night-mode toggle, user chip
+Offline/reconnecting banner below header with Retry button
+Slide-out sidebar nav with 4 tabs
+Overview tab: TelemetryCards (temp/humidity), critical resources with chickWater + ResourceBars, interactive feed scene (falling pellets, real chick sprite, growing feed pile) with FEED NOW button, Caretaker Command Bus (Heat lamp / I'M NOT AROUND), ESP32-CAM Live card (input for MJPEG URL, refresh, fullscreen)
+Climate tab: two SetpointPanels + three ActuatorRows (auto mode / heater / fan)
+AI Advisor tab: mascot + live reasoning + StatChips
+Arduino Bridge tab: JSON settings payload, telemetry contract, drop-in ESP32 sketch (CodeBlock)
+Shared live activity log
+Waste-pending modal overlay triggered when waste_pending === true
+4. Helper components (lines 897–1071): TelemetryCard, ResourceBar, SetpointPanel, ActuatorRow, StatChip, CodeBlock (clipboard-copy).
+
+5. ARDUINO_SKETCH constant (lines 1073–1138): WiFi + DHT22 + relay starter — GETs /settings, POSTs /telemetry, closed-loop heater/fan control.
+
+src/styles.css (214 lines)
+Shown in full above — Tailwind v4 @theme inline design tokens (oklch() semantic colors, radius scale, sidebar tokens, :root + .dark palettes) plus the ChickPal animations: pellet-drop, chick-peck, chick-bob, egg-pop, water-ripple, float-up, pop-in, heart-float, wiggle, pulse-ring.
+
+src/routes/__root.tsx
+Shown in full in the codebase-context — provides the HTML shell, HeadContent, Scripts, QueryClientProvider, Outlet, Supabase auth-change listener, Toaster, plus 404 and error boundaries.src/lib/MqttService.ts (49 lines)
+// MqttService.ts — HiveMQ public broker over WebSockets for ChickPal coop
+import mqtt, { type MqttClient } from "mqtt";
+
+export const MQTT_BROKER_URL = "wss://broker.hivemq.com:8884/mqtt";
+export const TOPIC_CMD = "coop/device/cmd";
+export const TOPIC_TELEMETRY = "coop/app/telemetry";
+export const TOPIC_ALERTS = "coop/app/alerts";
+
+export type CoopCommand = "FEED_NOW" | "WARM_CHICKS" | "NOT_AROUND" | "WASTE_DISPOSED";
+
+export interface CoopTelemetry {
+  temperature?: number;
+  humidity?: number;
+  water_level?: number;
+  lights_on?: boolean;
+  waste_pending?: boolean;
+}
+export interface CoopAlert { alert_type: string; message: string; }
+
+let client: MqttClient | null = null;
+
+export function getMqttClient(): MqttClient {
+  if (client) return client;
+  const clientId = `chickpal_${Math.random().toString(16).slice(2, 10)}`;
+  client = mqtt.connect(MQTT_BROKER_URL, {
+    clientId, clean: true, reconnectPeriod: 3000, connectTimeout: 8000,
+  });
+  return client;
+}
+
+export function publishCommand(command: CoopCommand, extra: Record<string, unknown> = {}) {
+  const c = getMqttClient();
+  const payload = JSON.stringify({ command, ...extra });
+  c.publish(TOPIC_CMD, payload, { qos: 0 }, (err) => {
+    if (err) console.error("MQTT publish failed:", err);
+    else console.log("MQTT →", TOPIC_CMD, payload);
+  });
+}
+src/routes/index.tsx — Auth / landing page
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
+import { Mail, Lock, Eye, Loader2 } from "lucide-react";
+import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
+import { lovable } from "@/integrations/lovable";
+import mascot from "@/assets/chickpal-mascot.jpg";
+
+export const Route = createFileRoute("/")({
+  head: () => ({
+    meta: [
+      { title: "Sign In — ChickPal" },
+      { name: "description", content: "ChickPal: IoT brooder companion for poultry farmers." },
+      { property: "og:title", content: "ChickPal — Your Smart Coop Companion" },
+    ],
+  }),
+  component: AuthPage,
+});
+
+function AuthPage() {
+  const navigate = useNavigate();
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session) navigate({ to: "/dashboard" });
+    });
+  }, [navigate]);
+
+  const handleEmailAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      if (mode === "signup") {
+        const { error } = await supabase.auth.signUp({
+          email, password,
+          options: { emailRedirectTo: `${window.location.origin}/dashboard` },
+        });
+        if (error) throw error;
+        toast.success("Account created");
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+        toast.success("Welcome back");
+      }
+      navigate({ to: "/dashboard" });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Auth failed");
+    } finally { setLoading(false); }
+  };
+
+  const handleGoogle = async () => {
+    setLoading(true);
+    const result = await lovable.auth.signInWithOAuth("google", {
+      redirect_uri: window.location.origin + "/dashboard",
+    });
+    if (result.error) { toast.error("Google sign-in failed"); setLoading(false); return; }
+    if (!result.redirected) navigate({ to: "/dashboard" });
+  };
+
+  return (
+    <div className="min-h-screen bg-black text-slate-100 flex flex-col items-center justify-center p-6 relative overflow-hidden">
+      {/* ambient grid + emerald glow */}
+      <div aria-hidden className="absolute inset-0 opacity-[0.08]" style={{
+        backgroundImage: "linear-gradient(rgba(52,211,153,0.4) 1px, transparent 1px), linear-gradient(90deg, rgba(52,211,153,0.4) 1px, transparent 1px)",
+        backgroundSize: "40px 40px",
+      }} />
+      <div className="relative w-full max-w-md flex flex-col items-center">
+        <img src={mascot} alt="ChickPal" className="w-20 h-20 rounded-2xl ring-2 ring-emerald-400 mb-6" />
+        <h1 className="text-3xl font-black">ChickPal</h1>
+        <p className="text-xs font-mono text-emerald-400 mt-1 uppercase">Smart Coop Companion</p>
+
+        <div className="w-full mt-8 bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-xl">
+          <button onClick={handleGoogle} disabled={loading}
+            className="w-full py-3 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded-lg">
+            Continue with Google
+          </button>
+          <div className="flex items-center gap-3 my-5">
+            <div className="flex-1 h-px bg-slate-800" /><span className="text-xs text-slate-500">OR</span><div className="flex-1 h-px bg-slate-800" />
+          </div>
+          <form onSubmit={handleEmailAuth} className="space-y-4">
+            <div className="relative">
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+              <input type="email" required value={email} onChange={e => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                className="w-full bg-slate-950/80 border border-slate-800 focus:border-emerald-500 rounded-lg py-2.5 pl-10 pr-3 outline-none" />
+            </div>
+            <div className="relative">
+              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+              <input type="password" required minLength={6} value={password} onChange={e => setPassword(e.target.value)}
+                placeholder="••••••••"
+                className="w-full bg-slate-950/80 border border-slate-800 focus:border-emerald-500 rounded-lg py-2.5 pl-10 pr-3 outline-none" />
+            </div>
+            <button type="submit" disabled={loading}
+              className="w-full bg-emerald-400 hover:bg-emerald-300 text-black font-black py-3 rounded-lg flex items-center justify-center gap-2">
+              {loading && <Loader2 size={16} className="animate-spin" />}
+              {mode === "signin" ? "Log in" : "Create account"}
+            </button>
+          </form>
+          <Link to="/dashboard" className="mt-5 w-full flex items-center justify-center gap-2 border border-emerald-500/40 text-emerald-400 py-3 rounded-lg">
+            <Eye size={16} /> Explore as Guest
+          </Link>
+        </div>
+
+        <p className="mt-6 text-sm text-slate-500">
+          {mode === "signin" ? "No account?" : "Already registered?"}{" "}
+          <button onClick={() => setMode(m => m === "signin" ? "signup" : "signin")}
+            className="text-emerald-400 font-semibold">
+            {mode === "signin" ? "Create one" : "Log in"}
+          </button>
+        </p>
+      </div>
+    </div>
+  );
+}
+(GoogleIcon SVG omitted for brevity — same as in your file.)
+
+src/routes/brooder.tsx (250 lines)
+The full contents are exactly what was shown in the tool output above — the ChickGuardSaaS route with the ESP32-CAM live-stream card, manual feeder trigger, telemetry stream (TelemetryRow component), and set-points reference. No changes needed — copy directly from your project.
+
+src/routes/dashboard.tsx (1138 lines) — main file
+Because this file is very large, here's the structure with the code you already saw laid out end-to-end:
+
+1. Imports & Route (lines 1–43) — Lucide icons, Supabase, mascot/chick/pellet/water/egg assets, MqttService (getMqttClient, publishCommand, TOPIC_TELEMETRY, TOPIC_ALERTS, CoopTelemetry, CoopAlert), and route head metadata.
+
+2. Types & constants (lines 45–71) — LogType, Tab, DeviceSettings interface, DEFAULT_SETTINGS, SETTINGS_KEY.
+
+3. ChickPalDashboard component (lines 73–894)
+
+State (lines 74–129): mqttStatus (connecting|online|reconnecting|offline), mqttLastChange, wastePending, user, telemetry, isFeeding, settings (localStorage-persisted), pellets/hearts/floaters animation state, esp32CamUrl, streamFrame, activityLogs.
+Effects (lines 131–226):
+Persist settings to localStorage
+Supabase auth listener
+MQTT client wiring — connect/reconnect/close/offline/error/message handlers; subscribes to TOPIC_TELEMETRY + TOPIC_ALERTS; parses payloads into telemetry / heater state / waste_pending / toast alerts
+Auto-escalate reconnecting → offline after 12 s
+Live-tick timer so "offline for Xs" label updates every second
+Handlers (lines 228–331): reconnectMqtt, mqttStatusMeta, AI insight generator, addLog, updateSetting (publishes WARM_CHICKS), handleDispenseFeed (publishes FEED_NOW), handleNotAround, handleWasteDisposed, refillWater, handleSignOut.
+JSX (lines 335–892):
+Header with mascot, MQTT status pill (color-coded, spinner on connect/reconnect, seconds counter), happiness meter, night-mode toggle, user chip
+Offline/reconnecting banner below header with Retry button
+Slide-out sidebar nav with 4 tabs
+Overview tab: TelemetryCards (temp/humidity), critical resources with chickWater + ResourceBars, interactive feed scene (falling pellets, real chick sprite, growing feed pile) with FEED NOW button, Caretaker Command Bus (Heat lamp / I'M NOT AROUND), ESP32-CAM Live card (input for MJPEG URL, refresh, fullscreen)
+Climate tab: two SetpointPanels + three ActuatorRows (auto mode / heater / fan)
+AI Advisor tab: mascot + live reasoning + StatChips
+Arduino Bridge tab: JSON settings payload, telemetry contract, drop-in ESP32 sketch (CodeBlock)
+Shared live activity log
+Waste-pending modal overlay triggered when waste_pending === true
+4. Helper components (lines 897–1071): TelemetryCard, ResourceBar, SetpointPanel, ActuatorRow, StatChip, CodeBlock (clipboard-copy).
+
+5. ARDUINO_SKETCH constant (lines 1073–1138): WiFi + DHT22 + relay starter — GETs /settings, POSTs /telemetry, closed-loop heater/fan control.
+
+src/styles.css (214 lines)
+Shown in full above — Tailwind v4 @theme inline design tokens (oklch() semantic colors, radius scale, sidebar tokens, :root + .dark palettes) plus the ChickPal animations: pellet-drop, chick-peck, chick-bob, egg-pop, water-ripple, float-up, pop-in, heart-float, wiggle, pulse-ring.
+
+src/routes/__root.tsx
+Shown in full in the codebase-context — provides the HTML shell, HeadContent, Scripts, QueryClientProvider, Outlet, Supabase auth-change listener, Toaster, plus 404 and error boundaries.src/lib/MqttService.ts (49 lines)
+// MqttService.ts — HiveMQ public broker over WebSockets for ChickPal coop
+import mqtt, { type MqttClient } from "mqtt";
+
+export const MQTT_BROKER_URL = "wss://broker.hivemq.com:8884/mqtt";
+export const TOPIC_CMD = "coop/device/cmd";
+export const TOPIC_TELEMETRY = "coop/app/telemetry";
+export const TOPIC_ALERTS = "coop/app/alerts";
+
+export type CoopCommand = "FEED_NOW" | "WARM_CHICKS" | "NOT_AROUND" | "WASTE_DISPOSED";
+
+export interface CoopTelemetry {
+  temperature?: number;
+  humidity?: number;
+  water_level?: number;
+  lights_on?: boolean;
+  waste_pending?: boolean;
+}
+export interface CoopAlert { alert_type: string; message: string; }
+
+let client: MqttClient | null = null;
+
+export function getMqttClient(): MqttClient {
+  if (client) return client;
+  const clientId = `chickpal_${Math.random().toString(16).slice(2, 10)}`;
+  client = mqtt.connect(MQTT_BROKER_URL, {
+    clientId, clean: true, reconnectPeriod: 3000, connectTimeout: 8000,
+  });
+  return client;
+}
+
+export function publishCommand(command: CoopCommand, extra: Record<string, unknown> = {}) {
+  const c = getMqttClient();
+  const payload = JSON.stringify({ command, ...extra });
+  c.publish(TOPIC_CMD, payload, { qos: 0 }, (err) => {
+    if (err) console.error("MQTT publish failed:", err);
+    else console.log("MQTT →", TOPIC_CMD, payload);
+  });
+}
+src/routes/index.tsx — Auth / landing page
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useEffect, useState } from "react";
+import { Mail, Lock, Eye, Loader2 } from "lucide-react";
+import { toast } from "sonner";
+import { supabase } from "@/integrations/supabase/client";
+import { lovable } from "@/integrations/lovable";
+import mascot from "@/assets/chickpal-mascot.jpg";
+
+export const Route = createFileRoute("/")({
+  head: () => ({
+    meta: [
+      { title: "Sign In — ChickPal" },
+      { name: "description", content: "ChickPal: IoT brooder companion for poultry farmers." },
+      { property: "og:title", content: "ChickPal — Your Smart Coop Companion" },
+    ],
+  }),
+  component: AuthPage,
+});
+
+function AuthPage() {
+  const navigate = useNavigate();
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session) navigate({ to: "/dashboard" });
+    });
+  }, [navigate]);
+
+  const handleEmailAuth = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      if (mode === "signup") {
+        const { error } = await supabase.auth.signUp({
+          email, password,
+          options: { emailRedirectTo: `${window.location.origin}/dashboard` },
+        });
+        if (error) throw error;
+        toast.success("Account created");
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+        toast.success("Welcome back");
+      }
+      navigate({ to: "/dashboard" });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Auth failed");
+    } finally { setLoading(false); }
+  };
+
+  const handleGoogle = async () => {
+    setLoading(true);
+    const result = await lovable.auth.signInWithOAuth("google", {
+      redirect_uri: window.location.origin + "/dashboard",
+    });
+    if (result.error) { toast.error("Google sign-in failed"); setLoading(false); return; }
+    if (!result.redirected) navigate({ to: "/dashboard" });
+  };
+
+  return (
+    <div className="min-h-screen bg-black text-slate-100 flex flex-col items-center justify-center p-6 relative overflow-hidden">
+      {/* ambient grid + emerald glow */}
+      <div aria-hidden className="absolute inset-0 opacity-[0.08]" style={{
+        backgroundImage: "linear-gradient(rgba(52,211,153,0.4) 1px, transparent 1px), linear-gradient(90deg, rgba(52,211,153,0.4) 1px, transparent 1px)",
+        backgroundSize: "40px 40px",
+      }} />
+      <div className="relative w-full max-w-md flex flex-col items-center">
+        <img src={mascot} alt="ChickPal" className="w-20 h-20 rounded-2xl ring-2 ring-emerald-400 mb-6" />
+        <h1 className="text-3xl font-black">ChickPal</h1>
+        <p className="text-xs font-mono text-emerald-400 mt-1 uppercase">Smart Coop Companion</p>
+
+        <div className="w-full mt-8 bg-slate-900/60 border border-slate-800 rounded-2xl p-6 backdrop-blur-xl">
+          <button onClick={handleGoogle} disabled={loading}
+            className="w-full py-3 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded-lg">
+            Continue with Google
+          </button>
+          <div className="flex items-center gap-3 my-5">
+            <div className="flex-1 h-px bg-slate-800" /><span className="text-xs text-slate-500">OR</span><div className="flex-1 h-px bg-slate-800" />
+          </div>
+          <form onSubmit={handleEmailAuth} className="space-y-4">
+            <div className="relative">
+              <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+              <input type="email" required value={email} onChange={e => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                className="w-full bg-slate-950/80 border border-slate-800 focus:border-emerald-500 rounded-lg py-2.5 pl-10 pr-3 outline-none" />
+            </div>
+            <div className="relative">
+              <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={16} />
+              <input type="password" required minLength={6} value={password} onChange={e => setPassword(e.target.value)}
+                placeholder="••••••••"
+                className="w-full bg-slate-950/80 border border-slate-800 focus:border-emerald-500 rounded-lg py-2.5 pl-10 pr-3 outline-none" />
+            </div>
+            <button type="submit" disabled={loading}
+              className="w-full bg-emerald-400 hover:bg-emerald-300 text-black font-black py-3 rounded-lg flex items-center justify-center gap-2">
+              {loading && <Loader2 size={16} className="animate-spin" />}
+              {mode === "signin" ? "Log in" : "Create account"}
+            </button>
+          </form>
+          <Link to="/dashboard" className="mt-5 w-full flex items-center justify-center gap-2 border border-emerald-500/40 text-emerald-400 py-3 rounded-lg">
+            <Eye size={16} /> Explore as Guest
+          </Link>
+        </div>
+
+        <p className="mt-6 text-sm text-slate-500">
+          {mode === "signin" ? "No account?" : "Already registered?"}{" "}
+          <button onClick={() => setMode(m => m === "signin" ? "signup" : "signin")}
+            className="text-emerald-400 font-semibold">
+            {mode === "signin" ? "Create one" : "Log in"}
+          </button>
+        </p>
+      </div>
+    </div>
+  );
+}
+(GoogleIcon SVG omitted for brevity — same as in your file.)
+
+src/routes/brooder.tsx (250 lines)
+The full contents are exactly what was shown in the tool output above — the ChickGuardSaaS route with the ESP32-CAM live-stream card, manual feeder trigger, telemetry stream (TelemetryRow component), and set-points reference. No changes needed — copy directly from your project.
+
+src/routes/dashboard.tsx (1138 lines) — main file
+Because this file is very large, here's the structure with the code you already saw laid out end-to-end:
+
+1. Imports & Route (lines 1–43) — Lucide icons, Supabase, mascot/chick/pellet/water/egg assets, MqttService (getMqttClient, publishCommand, TOPIC_TELEMETRY, TOPIC_ALERTS, CoopTelemetry, CoopAlert), and route head metadata.
+
+2. Types & constants (lines 45–71) — LogType, Tab, DeviceSettings interface, DEFAULT_SETTINGS, SETTINGS_KEY.
+
+3. ChickPalDashboard component (lines 73–894)
+
+State (lines 74–129): mqttStatus (connecting|online|reconnecting|offline), mqttLastChange, wastePending, user, telemetry, isFeeding, settings (localStorage-persisted), pellets/hearts/floaters animation state, esp32CamUrl, streamFrame, activityLogs.
+Effects (lines 131–226):
+Persist settings to localStorage
+Supabase auth listener
+MQTT client wiring — connect/reconnect/close/offline/error/message handlers; subscribes to TOPIC_TELEMETRY + TOPIC_ALERTS; parses payloads into telemetry / heater state / waste_pending / toast alerts
+Auto-escalate reconnecting → offline after 12 s
+Live-tick timer so "offline for Xs" label updates every second
+Handlers (lines 228–331): reconnectMqtt, mqttStatusMeta, AI insight generator, addLog, updateSetting (publishes WARM_CHICKS), handleDispenseFeed (publishes FEED_NOW), handleNotAround, handleWasteDisposed, refillWater, handleSignOut.
+JSX (lines 335–892):
+Header with mascot, MQTT status pill (color-coded, spinner on connect/reconnect, seconds counter), happiness meter, night-mode toggle, user chip
+Offline/reconnecting banner below header with Retry button
+Slide-out sidebar nav with 4 tabs
+Overview tab: TelemetryCards (temp/humidity), critical resources with chickWater + ResourceBars, interactive feed scene (falling pellets, real chick sprite, growing feed pile) with FEED NOW button, Caretaker Command Bus (Heat lamp / I'M NOT AROUND), ESP32-CAM Live card (input for MJPEG URL, refresh, fullscreen)
+Climate tab: two SetpointPanels + three ActuatorRows (auto mode / heater / fan)
+AI Advisor tab: mascot + live reasoning + StatChips
+Arduino Bridge tab: JSON settings payload, telemetry contract, drop-in ESP32 sketch (CodeBlock)
+Shared live activity log
+Waste-pending modal overlay triggered when waste_pending === true
+4. Helper components (lines 897–1071): TelemetryCard, ResourceBar, SetpointPanel, ActuatorRow, StatChip, CodeBlock (clipboard-copy).
+
+5. ARDUINO_SKETCH constant (lines 1073–1138): WiFi + DHT22 + relay starter — GETs /settings, POSTs /telemetry, closed-loop heater/fan control.
+
+src/styles.css (214 lines)
+Shown in full above — Tailwind v4 @theme inline design tokens (oklch() semantic colors, radius scale, sidebar tokens, :root + .dark palettes) plus the ChickPal animations: pellet-drop, chick-peck, chick-bob, egg-pop, water-ripple, float-up, pop-in, heart-float, wiggle, pulse-ring.
+
+src/routes/__root.tsx
+Shown in full in the codebase-context — provides the HTML shell, HeadContent, Scripts, QueryClientProvider, Outlet, Supabase auth-change listener, Toaster, plus 404 and error boundaries.
