@@ -1,0 +1,23 @@
+Linda Chick Proprietary License
+
+Copyright (c) 2026 Mark Githinji Karegu
+
+All Rights Reserved.
+
+This repository contains proprietary software developed for the Linda Chick Intelligent Poultry Automation Platform.
+
+Permission is granted to view this source code for educational, research, and evaluation purposes only.
+
+You may NOT:
+
+• Copy this software
+• Modify this software
+• Redistribute this software
+• Create derivative works
+• Use this software commercially
+• Remove copyright notices
+• Claim this work as your own
+
+No license is granted except with prior written permission from the copyright holder.
+
+THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND.
